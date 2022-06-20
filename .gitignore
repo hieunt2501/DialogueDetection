@@ -233,8 +233,8 @@ fabric.properties
 .idea/caches/build_file_checksums.ser
 
 # User specified
-.data/
-.checkpoint/
-.config/
-.notebook/
-.utils/VnCoreNLP/
+/data
+/checkpoint
+/config
+/notebooks
+utils/VnCoreNLP
