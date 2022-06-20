@@ -1,0 +1,2 @@
+class CommonKey:
+    pass
