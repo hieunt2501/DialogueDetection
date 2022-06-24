@@ -51,7 +51,7 @@ class Trainer:
         self.writer = SummaryWriter(log_dir=log_dir)
 
     @staticmethod
-    def _get_loss_fn(num_classes, args=None, total_steps=None, is_eval=False, ignore_index=-1):
+    def _get_loss_fn(num_classes, args=None, total_steps=None, is_eval=False, ignore_index=-100):
         if is_eval or not args.tsa_schedule:
             return nn.CrossEntropyLoss(ignore_index=ignore_index)
 
@@ -128,7 +128,10 @@ class Trainer:
         loss_fn = dict()
         if self.args.task == "multitask":
             iob_loss_fn = self._get_loss_fn(self.args.iob_classes, self.args, total_steps)
-            speaker_loss_fn = self._get_loss_fn(self.args.speaker_classes, self.args, total_steps, ignore_index=-1)
+            speaker_loss_fn = self._get_loss_fn(self.args.speaker_classes,
+                                                self.args,
+                                                total_steps,
+                                                ignore_index=-1 if self.args.ignore_outside_conversation else -100)
 
             loss_fn["iob_loss_fn"] = iob_loss_fn
             loss_fn["speaker_loss_fn"] = speaker_loss_fn
@@ -153,7 +156,7 @@ class Trainer:
                 this_batch_loss = 0
                 with amp.context():
                     data = {k: v.to(self.args.use_device) for k, v in batch.items() if "tag" not in k}
-                    if self.args.task == "multitask":
+                    if self.args.task == "multitask" and self.args.mask_speaker:
                         data["speaker_tag"] = batch["speaker_tag"].to(self.args.use_device)
                     outputs = self.model(**data)
 
@@ -224,8 +227,6 @@ class Trainer:
         iob_tag = batch["iob_tag"]
         speaker_tag = batch["speaker_tag"]
 
-        print(speaker_logits.size())
-        print(speaker_tag.size())
         iob_loss = self._compute_loss(logits=iob_logits,
                                       labels=iob_tag,
                                       criterion=iob_loss_fn,
@@ -245,13 +246,15 @@ class Trainer:
         logger.info(f"  Instantaneous batch size per device = {self.args.per_device_eval_batch_size}")
 
         if not eval_loader:
-            eval_loader = self._get_loader(self.args, self.eval_dataset, self.data_collator, is_eval=True)
+            eval_loader = self._get_loader(self.args, self.eval_dataset, self.data_collator)
 
         eval_loss = 0
         eval_loss_fn = dict()
         if self.args.task == "multitask":
             eval_iob_loss_fn = self._get_loss_fn(self.args.iob_classes, is_eval=True)
-            eval_speaker_loss_fn = self._get_loss_fn(self.args.speaker_classes, is_eval=True)
+            eval_speaker_loss_fn = self._get_loss_fn(self.args.speaker_classes,
+                                                     is_eval=True,
+                                                     ignore_index=-1 if self.args.ignore_outside_conversation else -100)
 
             eval_loss_fn["eval_iob_loss_fn"] = eval_iob_loss_fn
             eval_loss_fn["eval_speaker_loss_fn"] = eval_speaker_loss_fn

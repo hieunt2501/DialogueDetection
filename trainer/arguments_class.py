@@ -88,3 +88,9 @@ class CustomTrainingArguments(TrainingArguments):
     fuse_lstm_information: Optional[bool] = field(
         default=False, metadata={"help": "Fuse information from two lstm output for multi-task"}
     )
+    mask_speaker: Optional[bool] = field(
+        default=False, metadata={"help": "Mask outside conversation sentences for speaker task"}
+    )
+    ignore_outside_conversation: Optional[bool] = field(
+        default=False, metadata={"help": "Ignore index for outside conversation while computing loss"}
+    )
