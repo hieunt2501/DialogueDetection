@@ -24,10 +24,10 @@ logger = logging.getLogger(__name__)
 
 
 def get_dataset(data_args, dataset):
-    train_dataframe = pd.read_csv(data_args.train_data_file, encoding='utf8')
+    train_dataframe = pd.read_csv(data_args.train_data_file, encoding='utf8')[:50]
 
     if data_args.eval_data_file:
-        eval_dataframe = pd.read_csv(data_args.eval_data_file, encoding='utf8')
+        eval_dataframe = pd.read_csv(data_args.eval_data_file, encoding='utf8')[:50]
     else:
         train_dataframe, eval_dataframe = train_test_split(train_dataframe, test_size=0.2, random_state=42)
 
@@ -90,7 +90,9 @@ def main():
         config = AutoConfig.from_pretrained('vinai/phobert-base')
 
     if task == "multitask":
-        model = BertLSTMSequenceLabeling(config)
+        model = BertLSTMSequenceLabeling(config,
+                                         fuse_lstm_information=training_args.fuse_lstm_information,
+                                         residual=training_args.residual)
         collator = SequenceLabelingCollator(tokenizer)
         dataset = SequenceLabelingDataset
     elif task == "speaker":

@@ -51,15 +51,16 @@ class Trainer:
         self.writer = SummaryWriter(log_dir=log_dir)
 
     @staticmethod
-    def _get_loss_fn(num_classes, args=None, total_steps=None, is_eval=False):
+    def _get_loss_fn(num_classes, args=None, total_steps=None, is_eval=False, ignore_index=-1):
         if is_eval or not args.tsa_schedule:
-            return nn.CrossEntropyLoss()
+            return nn.CrossEntropyLoss(ignore_index=ignore_index)
 
         return TsaCrossEntropyLoss(num_steps=total_steps,
                                    num_classes=num_classes,
                                    alpha=args.tsa_alpha,
                                    temperature=args.temperature,
-                                   cuda=True if args.use_device == "cuda" else False)
+                                   cuda=True if args.use_device == "cuda" else False,
+                                   ignore_index=ignore_index)
 
     @staticmethod
     def _get_optimizer(model, args, total_steps):
@@ -127,7 +128,7 @@ class Trainer:
         loss_fn = dict()
         if self.args.task == "multitask":
             iob_loss_fn = self._get_loss_fn(self.args.iob_classes, self.args, total_steps)
-            speaker_loss_fn = self._get_loss_fn(self.args.speaker_classes, self.args, total_steps)
+            speaker_loss_fn = self._get_loss_fn(self.args.speaker_classes, self.args, total_steps, ignore_index=-1)
 
             loss_fn["iob_loss_fn"] = iob_loss_fn
             loss_fn["speaker_loss_fn"] = speaker_loss_fn
@@ -152,6 +153,8 @@ class Trainer:
                 this_batch_loss = 0
                 with amp.context():
                     data = {k: v.to(self.args.use_device) for k, v in batch.items() if "tag" not in k}
+                    if self.args.task == "multitask":
+                        data["speaker_tag"] = batch["speaker_tag"].to(self.args.use_device)
                     outputs = self.model(**data)
 
                     if self.args.task == "multitask":
@@ -190,7 +193,7 @@ class Trainer:
 
             if self.args.task == "multitask":
                 f1_iob, f1_speaker = eval_score
-                eval_score = np.mean(f1_iob, f1_speaker)
+                eval_score = np.mean((f1_iob, f1_speaker))
 
             if eval_score > best_eval_score:
                 best_eval_score = eval_score
@@ -204,13 +207,13 @@ class Trainer:
             loss = self._compute_loss(logits=logits,
                                       labels=labels,
                                       criterion=loss_fn,
-                                      n_class=self.args.speaker_classes)            
+                                      n_class=self.args.speaker_classes)
         else:
             labels = batch["iob_tag"]
             loss = self._compute_loss(logits=logits,
                                       labels=labels,
                                       criterion=loss_fn,
-                                      n_class=self.args.iob_classes)                
+                                      n_class=self.args.iob_classes)
 
         return loss, logits, labels
 
@@ -221,6 +224,8 @@ class Trainer:
         iob_tag = batch["iob_tag"]
         speaker_tag = batch["speaker_tag"]
 
+        print(speaker_logits.size())
+        print(speaker_tag.size())
         iob_loss = self._compute_loss(logits=iob_logits,
                                       labels=iob_tag,
                                       criterion=iob_loss_fn,
@@ -254,7 +259,7 @@ class Trainer:
             eval_loss_fn["loss_fn"] = self._get_loss_fn(self.args.speaker_classes, is_eval=True)
         else:
             eval_loss_fn["loss_fn"] = self._get_loss_fn(self.args.iob_classes, is_eval=True)
-        
+
         step_eval_progress_bar = tqdm(enumerate(eval_loader), total=len(eval_loader), leave=False)
 
         total_pred = defaultdict(list)
@@ -271,7 +276,7 @@ class Trainer:
                                                                       outputs,
                                                                       eval_loss_fn["eval_iob_loss_fn"],
                                                                       eval_loss_fn["eval_speaker_loss_fn"])
-                    
+
                     iob_pred = logits[0].argmax(dim=-1).cpu().view(-1).tolist()
                     speaker_pred = logits[1].argmax(dim=-1).cpu().view(-1).tolist()
 
@@ -297,7 +302,7 @@ class Trainer:
 
         eval_loss /= len(eval_loader)
         self.writer.add_scalar("eval/avg_loss", eval_loss, accumulated_steps)
-                
+
         # if self.args.multitask:
         if self.args.task == "multitask":
             iob_f_score = metrics.f1_score(total_label["total_iob_tag"],
@@ -308,12 +313,12 @@ class Trainer:
                                                average="macro")
             self.writer.add_scalar("eval/iob_f1_score", iob_f_score, accumulated_steps)
             self.writer.add_scalar("eval/speaker_f1_score", speaker_f_score, accumulated_steps)
-            
+
             logger.info(f"  Classification report: IOB Tag")
             print(metrics.classification_report(total_label["total_iob_tag"], total_pred["total_iob_pred"]))
             logger.info(f"  Classification report: Speaker Tag")
             print(metrics.classification_report(total_label["total_speaker_tag"], total_pred["total_speaker_pred"]))
-            
+
             return eval_loss, (iob_f_score, speaker_f_score)
         else:
             f_score = metrics.f1_score(total_label["tag"], total_pred["logits"], average="macro")

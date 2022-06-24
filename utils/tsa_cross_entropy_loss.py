@@ -12,13 +12,13 @@ class TsaCrossEntropyLoss(object):
                  cuda=False,
                  schedule='log',
                  current_step=0,
-                 ignore_idx=None):
+                 ignore_index=None):
         if weight is not None:
             self.loss_function = torch.nn.CrossEntropyLoss(
                 reduction='none', weight=weight)
-        elif ignore_idx:
+        elif ignore_index:
             self.loss_function = torch.nn.CrossEntropyLoss(
-                reduction='none', ignore_index=ignore_idx)
+                reduction='none', ignore_index=ignore_index)
         else:
             self.loss_function = torch.nn.CrossEntropyLoss(reduction='none')
 

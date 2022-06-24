@@ -81,4 +81,10 @@ class CustomTrainingArguments(TrainingArguments):
     )
     lamb_speaker: Optional[float] = field(
         default=1, metadata={"help": "Lambda for speaker tag loss"}
-    ) 
+    )
+    residual: Optional[bool] = field(
+        default=False, metadata={"help": "Residual connection from bert output and lstm output for multi-task"}
+    )
+    fuse_lstm_information: Optional[bool] = field(
+        default=False, metadata={"help": "Fuse information from two lstm output for multi-task"}
+    )

@@ -16,6 +16,8 @@ class BaseModel(RobertaPreTrainedModel, ABC):
                  bidirectional=True):
         super().__init__(config)
 
+        self.config = config
+
         self.bert = RobertaModel(config)
 
         self.lstm = nn.LSTM(input_size=config.hidden_size,
