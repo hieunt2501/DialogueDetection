@@ -38,6 +38,7 @@ class SequenceLabelingCollator(object):
     def __call__(self, batch):
         batch_text = [data["text"] for data in batch]
         speaker_tag = torch.tensor([data["speaker_tag"] for data in batch])
+        speaker_tag[speaker_tag == -1] = 2
         iob_tag = torch.tensor([data["iob_tag"] for data in batch])
 
         ids, mask = tokenize_text(self.tokenizer, batch_text, len(batch), self.max_length)

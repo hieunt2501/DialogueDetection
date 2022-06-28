@@ -92,7 +92,6 @@ class BertLSTMSequenceLabeling(BaseModel, ABC):
         speaker_logits = torch.cat((h[-1], h[-2]), dim=-1).view(outputs.size(0),
                                                                 outputs.size(1) - self.window_size + 1,
                                                                 -1)
-
         if self.fuse_lstm_information:
             # batch_size x num_pairs x window_size x lstm output dim
             iob_lstm_splits = splits_into_pairs(lstm_out, self.window_size)

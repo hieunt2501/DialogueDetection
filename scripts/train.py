@@ -24,10 +24,10 @@ logger = logging.getLogger(__name__)
 
 
 def get_dataset(data_args, dataset):
-    train_dataframe = pd.read_csv(data_args.train_data_file, encoding='utf8')[:50]
+    train_dataframe = pd.read_csv(data_args.train_data_file, encoding='utf8')
 
     if data_args.eval_data_file:
-        eval_dataframe = pd.read_csv(data_args.eval_data_file, encoding='utf8')[:50]
+        eval_dataframe = pd.read_csv(data_args.eval_data_file, encoding='utf8')
     else:
         train_dataframe, eval_dataframe = train_test_split(train_dataframe, test_size=0.2, random_state=42)
 
@@ -92,15 +92,20 @@ def main():
     if task == "multitask":
         model = BertLSTMSequenceLabeling(config,
                                          fuse_lstm_information=training_args.fuse_lstm_information,
-                                         residual=training_args.residual)
+                                         residual=training_args.residual,
+                                         speaker_class=training_args.speaker_classes,
+                                         iob_class=training_args.iob_classes)
         collator = SequenceLabelingCollator(tokenizer)
         dataset = SequenceLabelingDataset
     elif task == "speaker":
-        model = SpeakerDiarization(config)
+        model = SpeakerDiarization(config,
+                                   speaker_class=training_args.speaker_classes)
         collator = SpeakerDiarizationCollator(tokenizer)
         dataset = SpeakerDiarizationDataset
     else:
-        model = DialogueDetection(config)
+        model = DialogueDetection(config,
+                                  iob_class=training_args.iob_classes,
+                                  residual=training_args.residual)
         collator = SequenceLabelingCollator(tokenizer)
         dataset = SequenceLabelingDataset
 

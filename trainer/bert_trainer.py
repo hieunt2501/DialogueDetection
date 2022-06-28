@@ -6,8 +6,11 @@ from collections import defaultdict
 
 import torch
 import numpy as np
+import sklearn
 from torch import nn
 from sklearn import metrics
+from seqeval.metrics import f1_score, classification_report
+from seqeval.scheme import IOBES
 from tqdm.auto import tqdm
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -15,7 +18,9 @@ from transformers import AdamW, get_cosine_with_hard_restarts_schedule_with_warm
 
 from trainer.amp import MixedPrecisionManager
 from utils.tsa_cross_entropy_loss import TsaCrossEntropyLoss
+from dataset.utils import iob_tags
 
+iob_reverse = {v: k for k, v in iob_tags.items()}
 logger = logging.getLogger(__name__)
 
 
@@ -267,6 +272,7 @@ class Trainer:
 
         total_pred = defaultdict(list)
         total_label = defaultdict(list)
+
         self.model.eval()
 
         for _, batch in step_eval_progress_bar:
@@ -280,22 +286,29 @@ class Trainer:
                                                                       eval_loss_fn["eval_iob_loss_fn"],
                                                                       eval_loss_fn["eval_speaker_loss_fn"])
 
-                    iob_pred = logits[0].argmax(dim=-1).cpu().view(-1).tolist()
+                    iob_pred = logits[0].argmax(dim=-1).cpu().tolist()
                     speaker_pred = logits[1].argmax(dim=-1).cpu().view(-1).tolist()
 
-                    iob_tag = labels[0].cpu().view(-1).tolist()
+                    iob_tag = labels[0].cpu().tolist()
                     speaker_tag = labels[1].cpu().view(-1).tolist()
 
-                    total_pred["total_iob_pred"].extend(iob_pred)
+                    total_pred["total_iob_pred"].extend([[iob_reverse[x] for x in pred] for pred in iob_pred])
                     total_pred["total_speaker_pred"].extend(speaker_pred)
 
-                    total_label["total_iob_tag"].extend(iob_tag)
+                    total_label["total_iob_tag"].extend([[iob_reverse[x] for x in tag] for tag in iob_tag])
                     total_label["total_speaker_tag"].extend(speaker_tag)
                 else:
                     loss, logits, labels = self._train_step(batch, outputs, eval_loss_fn["loss_fn"])
 
-                    pred = logits.argmax(dim=-1).cpu().view(-1).tolist()
-                    labels = labels.cpu().view(-1).tolist()
+                    if self.args.task == "speaker":
+                        pred = logits.argmax(dim=-1).cpu().view(-1).tolist()
+                        labels = labels.cpu().view(-1).tolist()
+                    else:
+                        pred = logits.argmax(dim=-1).cpu().tolist()
+                        labels = labels.cpu().tolist()
+
+                        pred = [[iob_reverse[x] for x in p] for p in pred]
+                        labels = [[iob_reverse[x] for x in tag] for tag in labels]
 
                     total_pred["logits"].extend(pred)
                     total_label["tag"].extend(labels)
@@ -306,25 +319,34 @@ class Trainer:
         eval_loss /= len(eval_loader)
         self.writer.add_scalar("eval/avg_loss", eval_loss, accumulated_steps)
 
-        # if self.args.multitask:
         if self.args.task == "multitask":
-            iob_f_score = metrics.f1_score(total_label["total_iob_tag"],
-                                           total_pred["total_iob_pred"],
-                                           average="macro")
-            speaker_f_score = metrics.f1_score(total_label["total_speaker_tag"],
-                                               total_pred["total_speaker_pred"],
-                                               average="macro")
+            iob_f_score = f1_score(total_label["total_iob_tag"],
+                                                   total_pred["total_iob_pred"],
+                                                   average="macro",scheme=IOBES)
+            speaker_f_score = sklearn.metrics.f1_score(total_label["total_speaker_tag"],
+                                                       total_pred["total_speaker_pred"],
+                                                       average="macro")
             self.writer.add_scalar("eval/iob_f1_score", iob_f_score, accumulated_steps)
             self.writer.add_scalar("eval/speaker_f1_score", speaker_f_score, accumulated_steps)
 
             logger.info(f"  Classification report: IOB Tag")
-            print(metrics.classification_report(total_label["total_iob_tag"], total_pred["total_iob_pred"]))
+            print(classification_report(total_label["total_iob_tag"],
+                                                        total_pred["total_iob_pred"],
+                                                        scheme=IOBES))
             logger.info(f"  Classification report: Speaker Tag")
-            print(metrics.classification_report(total_label["total_speaker_tag"], total_pred["total_speaker_pred"]))
+            print(sklearn.metrics.classification_report(total_label["total_speaker_tag"],
+                                                        total_pred["total_speaker_pred"]))
 
             return eval_loss, (iob_f_score, speaker_f_score)
         else:
-            f_score = metrics.f1_score(total_label["tag"], total_pred["logits"], average="macro")
+            if self.args.task == "speaker":
+                f_score = sklearn.metrics.f1_score(total_label["tag"], total_pred["logits"], average="macro")
+                print(sklearn.metrics.classification_report(total_label["tag"], total_pred["logits"]))
+            else:
+                f_score = f1_score(total_label["tag"], total_pred["logits"], average="macro")
+                print(classification_report(total_label["tag"], total_pred["logits"]))
+                label = [x for label in total_label["tag"] for x in label]
+                pred = [x for tag in total_pred["logits"] for x in tag]
+                print(sklearn.metrics.classification_report(label, pred))
             self.writer.add_scalar("eval/f1_score", f_score, accumulated_steps)
-            print(metrics.classification_report(total_label["tag"], total_pred["logits"]))
             return eval_loss, f_score

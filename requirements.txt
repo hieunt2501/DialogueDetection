@@ -5,4 +5,6 @@ vncorenlp==1.0.3
 scikit-learn==0.22.2.post1
 tqdm==4.64.0
 packaging==21.3
-pandas
+pandas==1.4.2
+numpy==1.22.4
+seqeval==1.2.2
