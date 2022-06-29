@@ -82,15 +82,21 @@ class CustomTrainingArguments(TrainingArguments):
     lamb_speaker: Optional[float] = field(
         default=1, metadata={"help": "Lambda for speaker tag loss"}
     )
-    residual: Optional[bool] = field(
+    residual: bool = field(
         default=False, metadata={"help": "Residual connection from bert output and lstm output for multi-task"}
     )
-    fuse_lstm_information: Optional[bool] = field(
+    fuse_lstm_information: bool = field(
         default=False, metadata={"help": "Fuse information from two lstm output for multi-task"}
     )
-    mask_speaker: Optional[bool] = field(
+    mask_speaker: bool = field(
         default=False, metadata={"help": "Mask outside conversation sentences for speaker task"}
     )
-    ignore_outside_conversation: Optional[bool] = field(
+    ignore_outside_dialogue: bool = field(
         default=False, metadata={"help": "Ignore index for outside conversation while computing loss"}
+    )
+    crf: bool = field(
+        default=False, metadata={"help": "Use CRF for sequence labeling task"}
+    )
+    top_k: int = field(
+        default=1, metadata={"help": "Top K to find best paths for viterbi"}
     )

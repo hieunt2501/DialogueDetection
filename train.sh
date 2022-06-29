@@ -10,16 +10,18 @@ python ./scripts/train.py \
     --weight_decay 0.1 \
     --learning_rate 1e-5 \
     --num_train_epochs 50 \
-    --output_dir ./checkpoint/multi_task/v6 \
+    --output_dir ./checkpoint/multi_task/v7 \
     --overwrite_output_dir \
     --adam_beta2 0.98 \
     --warmup_ratio 0.1 \
     --task dialogue \
     --fuse_lstm_information False \
-    --residual True \
+    --residual False \
     --mask_speaker False \
     --speaker_classes 3 \
     --iob_classes 5 \
+    --crf True \
+    --top_k 1 \
     --fp16 False \
     --dataloader_pin_memory False \
     --dataloader_num_workers 0 \

@@ -1,23 +1,4 @@
-speaker_label_dict = {
-    ('O', 'O'): 0,
-    ('S1', 'O'): 0,
-    ('S2', 'O'): 0,
-    ('O', 'S1'): 0,
-    ('O', 'S2'): 0,
-    ('S1', 'S1'): 0,
-    ('S2', 'S2'): 0,
-    ('S1', 'S2'): 1,
-    ('S2', 'S1'): 1
-}
-
-
-iob_tags = {
-    "O": 0,
-    "B-D": 1,
-    "I-D": 2,
-    "E-D": 3
-}
-
+from dataset.label_schemes import SPEAKER_LABEL, BIOUL_LABEL
 
 def process_speaker_tags(tags):
     """
@@ -25,7 +6,7 @@ def process_speaker_tags(tags):
     :param tags: Speaker tags
     :return: Process speaker tags
     """
-    final_tags = [speaker_label_dict[tags[idx], tags[idx + 1]] for idx in range(len(tags) - 1)]
+    final_tags = [SPEAKER_LABEL[tags[idx], tags[idx + 1]] for idx in range(len(tags) - 1)]
     return final_tags
 
 
@@ -41,7 +22,7 @@ def process_iob_tags(tags):
     if tags[-1] == "I-D":
         tags[-1] = "E-D"
 
-    return [iob_tags[tag] for tag in tags]
+    return [BIOUL_LABEL[tag] for tag in tags]
 
 
 def tokenize_text(tokenizer, batch_text, batch_size, max_length):

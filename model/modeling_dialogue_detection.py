@@ -1,9 +1,11 @@
 from abc import ABC
-from typing import Optional
+from typing import Optional, List, cast
 
 import torch
+from allennlp.modules.conditional_random_field import ConditionalRandomField, allowed_transitions
 
 from model.base_module import BaseModel, ClassificationHead
+from dataset.label_schemes import REVERSE_LABEL
 
 
 class DialogueDetection(BaseModel, ABC):
@@ -12,26 +14,33 @@ class DialogueDetection(BaseModel, ABC):
                  out_dim=512,
                  n_layers=2,
                  dropout=0.1,
-                 iob_class=4,
+                 n_class=4,
                  bidirectional=True,
-                 window_size=2,
-                 residual=False):
+                 residual=False,
+                 crf=False,
+                 top_k=1):
         super().__init__(config, out_dim, n_layers, bidirectional)
 
-        self.window_size = window_size
+        # self.window_size = window_size
         self.residual = residual
+        self.use_crf = crf
+        self.top_k = top_k
 
         if bidirectional:
             out_dim = 2 * out_dim
 
+        if self.use_crf:
+            constraints = allowed_transitions("BIOUL", REVERSE_LABEL)
+            self.crf = ConditionalRandomField(num_tags=n_class, constraints=constraints)
+
         if residual:
             self.transform_linear = torch.nn.Linear(out_dim, self.config.hidden_size)
             self.clf = ClassificationHead(hidden_size=self.config.hidden_size,
-                                          n_class=iob_class,
+                                          n_class=n_class,
                                           dropout=dropout)
         else:
             self.clf = ClassificationHead(hidden_size=out_dim,
-                                          n_class=iob_class,
+                                          n_class=n_class,
                                           dropout=dropout)
 
     def forward(self,
@@ -44,7 +53,8 @@ class DialogueDetection(BaseModel, ABC):
                 labels: Optional[torch.LongTensor] = None,
                 output_attentions: Optional[bool] = None,
                 output_hidden_states: Optional[bool] = None,
-                return_dict: Optional[bool] = None):
+                return_dict: Optional[bool] = None,
+                tags: Optional[torch.LongTensor] = None):
 
         outputs = super().forward(input_ids,
                                   attention_mask,
@@ -66,7 +76,19 @@ class DialogueDetection(BaseModel, ABC):
             iob_inputs = torch.mean(torch.stack((iob_inputs, outputs)), dim=0)
 
         iob_logits = self.clf(iob_inputs)
+        output = {"logits": iob_logits}
 
-        return {
-            "logits": iob_logits,
-        }
+        if self.use_crf:
+            mask = torch.ones(outputs.size()[:2], dtype=torch.bool)
+            best_paths = self.crf.viterbi_tags(iob_logits, mask, top_k=self.top_k)
+            predicted_tags = cast(List[List[int]], [x[0][0] for x in best_paths])
+            if tags is not None:
+                loss = self.crf(iob_logits, tags, mask)
+                output["loss"] = -loss
+            output["best_paths"] = best_paths
+            output["predicted_tags"] = predicted_tags
+
+        return output
+        # return {
+            # "logits": iob_logits,
+        # }

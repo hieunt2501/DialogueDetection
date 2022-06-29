@@ -19,15 +19,16 @@ from model.modeling_dialogue_detection import DialogueDetection
 from dataset.multi_task import SequenceLabelingDataset, SequenceLabelingCollator
 from dataset.speaker_diarization import SpeakerDiarizationDataset, SpeakerDiarizationCollator
 from trainer.bert_trainer import Trainer
+from trainer.dialogue_trainer import DialogueTrainer
 
 logger = logging.getLogger(__name__)
 
 
 def get_dataset(data_args, dataset):
-    train_dataframe = pd.read_csv(data_args.train_data_file, encoding='utf8')
+    train_dataframe = pd.read_csv(data_args.train_data_file, encoding='utf8')[:50]
 
     if data_args.eval_data_file:
-        eval_dataframe = pd.read_csv(data_args.eval_data_file, encoding='utf8')
+        eval_dataframe = pd.read_csv(data_args.eval_data_file, encoding='utf8')[:50]
     else:
         train_dataframe, eval_dataframe = train_test_split(train_dataframe, test_size=0.2, random_state=42)
 
@@ -99,13 +100,15 @@ def main():
         dataset = SequenceLabelingDataset
     elif task == "speaker":
         model = SpeakerDiarization(config,
-                                   speaker_class=training_args.speaker_classes)
+                                   n_class=training_args.speaker_classes)
         collator = SpeakerDiarizationCollator(tokenizer)
         dataset = SpeakerDiarizationDataset
     else:
         model = DialogueDetection(config,
-                                  iob_class=training_args.iob_classes,
-                                  residual=training_args.residual)
+                                  n_class=training_args.iob_classes,
+                                  residual=training_args.residual,
+                                  crf=training_args.crf,
+                                  top_k=training_args.top_k)
         collator = SequenceLabelingCollator(tokenizer)
         dataset = SequenceLabelingDataset
 
@@ -114,13 +117,22 @@ def main():
     else:
         train_dataset, eval_dataset = get_dataset(data_args, dataset)
 
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        data_collator=collator
-    )
+    if task == "dialogue":
+        trainer = DialogueTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            data_collator=collator
+        )
+    else:
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            data_collator=collator
+        )
     trainer.train()
 
 

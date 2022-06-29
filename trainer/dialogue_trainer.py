@@ -23,7 +23,7 @@ from dataset.label_schemes import REVERSE_LABEL
 logger = logging.getLogger(__name__)
 
 
-class Trainer:
+class DialogueTrainer:
     def __init__(self, model, args, train_dataset=None, eval_dataset=None, data_collator=None):
         self.args = args
         self.model = model.to(args.use_device)
@@ -128,22 +128,6 @@ class Trainer:
         # init optimizer and scheduler
         optimizer, scheduler = self._get_optimizer(self.model, self.args, total_steps)
 
-        # init loss function
-        loss_fn = dict()
-        if self.args.task == "multitask":
-            iob_loss_fn = self._get_loss_fn(self.args.iob_classes, self.args, total_steps)
-            speaker_loss_fn = self._get_loss_fn(self.args.speaker_classes,
-                                                self.args,
-                                                total_steps,
-                                                ignore_index=-1 if self.args.ignore_outside_dialogue else -100)
-
-            loss_fn["iob_loss_fn"] = iob_loss_fn
-            loss_fn["speaker_loss_fn"] = speaker_loss_fn
-        elif self.args.task == "speaker":
-            loss_fn["loss_fn"] = self._get_loss_fn(self.args.speaker_classes, self.args, total_steps)
-        else:
-            loss_fn["loss_fn"] = self._get_loss_fn(self.args.iob_classes, self.args, total_steps)
-
         # init mixed precision training
         amp = MixedPrecisionManager(self.args.fp16)
 
@@ -160,17 +144,10 @@ class Trainer:
                 this_batch_loss = 0
                 with amp.context():
                     data = {k: v.to(self.args.use_device) for k, v in batch.items() if "tag" not in k}
-                    if self.args.task == "multitask" and self.args.mask_speaker:
-                        data["speaker_tag"] = batch["speaker_tag"].to(self.args.use_device)
-                    outputs = self.model(**data)
+                    data["tags"] = batch["iob_tag"]
 
-                    if self.args.task == "multitask":
-                        loss, _, _ = self._train_step_multitask(batch,
-                                                                outputs,
-                                                                loss_fn["iob_loss_fn"],
-                                                                loss_fn["speaker_loss_fn"])
-                    else:
-                        loss, _, _ = self._train_step(batch, outputs, loss_fn["loss_fn"])
+                    outputs = self.model(**data)
+                    loss = outputs["loss"]
 
                     loss = loss / self.args.temperature / self.args.gradient_accumulation_steps
 
@@ -198,51 +175,10 @@ class Trainer:
                 logger.info(f"  Saving best evaluation loss {eval_loss}")
                 self._save_model(optimizer, scheduler, desc="best_loss")
 
-            if self.args.task == "multitask":
-                f1_iob, f1_speaker = eval_score
-                eval_score = np.mean((f1_iob, f1_speaker))
-
             if eval_score > best_eval_score:
                 best_eval_score = eval_score
                 logger.info(f"  Saving best evaluation f1_score {eval_score}")
                 self._save_model(optimizer, scheduler, "best_score")
-
-    def _train_step(self, batch, outputs, loss_fn):
-        logits = outputs["logits"]
-        if self.args.task == "speaker":
-            labels = batch["speaker_tag"]
-            loss = self._compute_loss(logits=logits,
-                                      labels=labels,
-                                      criterion=loss_fn,
-                                      n_class=self.args.speaker_classes)
-        else:
-            labels = batch["iob_tag"]
-            loss = self._compute_loss(logits=logits,
-                                      labels=labels,
-                                      criterion=loss_fn,
-                                      n_class=self.args.iob_classes)
-
-        return loss, logits, labels
-
-    def _train_step_multitask(self, batch, outputs, iob_loss_fn, speaker_loss_fn):
-        iob_logits = outputs["iob_logits"]
-        speaker_logits = outputs["speaker_logits"]
-
-        iob_tag = batch["iob_tag"]
-        speaker_tag = batch["speaker_tag"]
-
-        iob_loss = self._compute_loss(logits=iob_logits,
-                                      labels=iob_tag,
-                                      criterion=iob_loss_fn,
-                                      n_class=self.args.iob_classes)
-        speaker_loss = self._compute_loss(logits=speaker_logits,
-                                          labels=speaker_tag,
-                                          criterion=speaker_loss_fn,
-                                          n_class=self.args.speaker_classes)
-
-        loss = self.args.lamb_iob * iob_loss + self.args.lamb_speaker * speaker_loss
-
-        return loss, (iob_logits, speaker_logits), (iob_tag, speaker_tag)
 
     def eval(self, accumulated_steps, eval_loader=None):
         logger.info("***** Running evaluation *****")
@@ -250,67 +186,41 @@ class Trainer:
         logger.info(f"  Instantaneous batch size per device = {self.args.per_device_eval_batch_size}")
 
         if not eval_loader:
-            eval_loader = self._get_loader(self.args, self.eval_dataset, self.data_collator)
+            eval_loader = self._get_loader(self.args,
+                                           self.eval_dataset,
+                                           self.data_collator,
+                                           self.args.per_device_eval_batch_size)
 
         eval_loss = 0
-        eval_loss_fn = dict()
-        if self.args.task == "multitask":
-            eval_iob_loss_fn = self._get_loss_fn(self.args.iob_classes, is_eval=True)
-            eval_speaker_loss_fn = self._get_loss_fn(self.args.speaker_classes,
-                                                     is_eval=True,
-                                                     ignore_index=-1 if self.args.ignore_outside_dialogue else -100)
-
-            eval_loss_fn["eval_iob_loss_fn"] = eval_iob_loss_fn
-            eval_loss_fn["eval_speaker_loss_fn"] = eval_speaker_loss_fn
-        elif self.args.task == "speaker":
-            eval_loss_fn["loss_fn"] = self._get_loss_fn(self.args.speaker_classes, is_eval=True)
-        else:
-            eval_loss_fn["loss_fn"] = self._get_loss_fn(self.args.iob_classes, is_eval=True)
-
         step_eval_progress_bar = tqdm(enumerate(eval_loader), total=len(eval_loader), leave=False)
 
-        total_pred = defaultdict(list)
-        total_label = defaultdict(list)
+        total_raw_pred = []
+        total_constraints_pred = []
+        total_label = []
 
         self.model.eval()
 
         for _, batch in step_eval_progress_bar:
             with torch.no_grad():
                 data = {k: v.to(self.args.use_device) for k, v in batch.items() if "tag" not in k}
+                data["tags"] = batch["iob_tag"]
                 outputs = self.model(**data)
 
-                if self.args.task == "multitask":
-                    loss, logits, labels = self._train_step_multitask(batch,
-                                                                      outputs,
-                                                                      eval_loss_fn["eval_iob_loss_fn"],
-                                                                      eval_loss_fn["eval_speaker_loss_fn"])
+                loss = outputs["loss"]
+                logits = outputs["logits"]
+                predicted_tags = outputs["predicted_tags"]
+                labels = data["tags"]
 
-                    iob_pred = logits[0].argmax(dim=-1).cpu().tolist()
-                    speaker_pred = logits[1].argmax(dim=-1).cpu().view(-1).tolist()
+                raw_pred = logits.argmax(dim=-1).cpu().tolist()
+                labels = labels.cpu().tolist()
 
-                    iob_tag = labels[0].cpu().tolist()
-                    speaker_tag = labels[1].cpu().view(-1).tolist()
+                raw_pred = [[REVERSE_LABEL[x] for x in p] for p in raw_pred]
+                predicted_tags = [[REVERSE_LABEL[x] for x in t] for t in predicted_tags]
+                labels = [[REVERSE_LABEL[x] for x in tag] for tag in labels]
 
-                    total_pred["total_iob_pred"].extend([[REVERSE_LABEL[x] for x in pred] for pred in iob_pred])
-                    total_pred["total_speaker_pred"].extend(speaker_pred)
-
-                    total_label["total_iob_tag"].extend([[REVERSE_LABEL[x] for x in tag] for tag in iob_tag])
-                    total_label["total_speaker_tag"].extend(speaker_tag)
-                else:
-                    loss, logits, labels = self._train_step(batch, outputs, eval_loss_fn["loss_fn"])
-
-                    if self.args.task == "speaker":
-                        pred = logits.argmax(dim=-1).cpu().view(-1).tolist()
-                        labels = labels.cpu().view(-1).tolist()
-                    else:
-                        pred = logits.argmax(dim=-1).cpu().tolist()
-                        labels = labels.cpu().tolist()
-
-                        pred = [[REVERSE_LABEL[x] for x in p] for p in pred]
-                        labels = [[REVERSE_LABEL[x] for x in tag] for tag in labels]
-
-                    total_pred["logits"].extend(pred)
-                    total_label["tag"].extend(labels)
+                total_raw_pred.extend(raw_pred)
+                total_constraints_pred.extend(predicted_tags)
+                total_label.extend(labels)
 
                 loss = loss / self.args.temperature / self.args.gradient_accumulation_steps
                 eval_loss += loss.item()
@@ -318,34 +228,20 @@ class Trainer:
         eval_loss /= len(eval_loader)
         self.writer.add_scalar("eval/avg_loss", eval_loss, accumulated_steps)
 
-        if self.args.task == "multitask":
-            iob_f_score = f1_score(total_label["total_iob_tag"],
-                                                   total_pred["total_iob_pred"],
-                                                   average="macro",scheme=IOBES)
-            speaker_f_score = sklearn.metrics.f1_score(total_label["total_speaker_tag"],
-                                                       total_pred["total_speaker_pred"],
-                                                       average="macro")
-            self.writer.add_scalar("eval/iob_f1_score", iob_f_score, accumulated_steps)
-            self.writer.add_scalar("eval/speaker_f1_score", speaker_f_score, accumulated_steps)
+        label = [x for label in total_label for x in label]
 
-            logger.info(f"  Classification report: IOB Tag")
-            print(classification_report(total_label["total_iob_tag"],
-                                                        total_pred["total_iob_pred"],
-                                                        scheme=IOBES))
-            logger.info(f"  Classification report: Speaker Tag")
-            print(sklearn.metrics.classification_report(total_label["total_speaker_tag"],
-                                                        total_pred["total_speaker_pred"]))
+        print("RAW LOGITS PREDICTION")
+        raw_f_score = f1_score(total_label, total_raw_pred, average="macro")
+        self.writer.add_scalar("eval/raw_f1_score", raw_f_score, accumulated_steps)
+        print(classification_report(total_label, total_raw_pred))
+        pred = [x for tag in total_raw_pred for x in tag]
+        print(sklearn.metrics.classification_report(label, pred))
 
-            return eval_loss, (iob_f_score, speaker_f_score)
-        else:
-            if self.args.task == "speaker":
-                f_score = sklearn.metrics.f1_score(total_label["tag"], total_pred["logits"], average="macro")
-                print(sklearn.metrics.classification_report(total_label["tag"], total_pred["logits"]))
-            else:
-                f_score = f1_score(total_label["tag"], total_pred["logits"], average="macro")
-                print(classification_report(total_label["tag"], total_pred["logits"]))
-                label = [x for label in total_label["tag"] for x in label]
-                pred = [x for tag in total_pred["logits"] for x in tag]
-                print(sklearn.metrics.classification_report(label, pred))
-            self.writer.add_scalar("eval/f1_score", f_score, accumulated_steps)
-            return eval_loss, f_score
+        print("VITERBI LOGITS PREDICTION")
+        viterbi_f_score = f1_score(total_label, total_constraints_pred, average="macro")
+        self.writer.add_scalar("eval/viterbi_f1_score", viterbi_f_score, accumulated_steps)
+        print(classification_report(total_label, total_constraints_pred))
+        pred = [x for tag in total_constraints_pred for x in tag]
+        print(sklearn.metrics.classification_report(label, pred))
+        # self.writer.add_scalar("eval/f1_score", f_score, accumulated_steps)
+        return eval_loss, viterbi_f_score
