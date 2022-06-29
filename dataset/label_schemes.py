@@ -11,7 +11,7 @@ SPEAKER_LABEL = {
 }
 
 
-# Same as BIOES (U == S), (L == E)
+# Same as BIOES == BIOLU (U == S), (L == E)
 BIOUL_LABEL = {
     "O": 0,
     "B-D": 1,
@@ -19,5 +19,11 @@ BIOUL_LABEL = {
     "L-D": 3,
     "U-D": 4
 }
+
+def get_reverse_label(n_class):
+    if n_class == 4:
+        return {v: k for k, v in BIOUL_LABEL.items() if k != "U-D"}
+    else:
+        return {v: k for k, v in BIOUL_LABEL.items()}
 
 REVERSE_LABEL = {v: k for k, v in BIOUL_LABEL.items()}

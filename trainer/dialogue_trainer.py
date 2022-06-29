@@ -144,7 +144,7 @@ class DialogueTrainer:
                 this_batch_loss = 0
                 with amp.context():
                     data = {k: v.to(self.args.use_device) for k, v in batch.items() if "tag" not in k}
-                    data["tags"] = batch["iob_tag"]
+                    data["tags"] = batch["iob_tag"].to(self.args.use_device)
 
                     outputs = self.model(**data)
                     loss = outputs["loss"]
@@ -203,7 +203,7 @@ class DialogueTrainer:
         for _, batch in step_eval_progress_bar:
             with torch.no_grad():
                 data = {k: v.to(self.args.use_device) for k, v in batch.items() if "tag" not in k}
-                data["tags"] = batch["iob_tag"]
+                data["tags"] = batch["iob_tag"].to(self.args.use_device)
                 outputs = self.model(**data)
 
                 loss = outputs["loss"]
