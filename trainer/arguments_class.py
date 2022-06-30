@@ -100,3 +100,6 @@ class CustomTrainingArguments(TrainingArguments):
     top_k: int = field(
         default=1, metadata={"help": "Top K to find best paths for viterbi"}
     )
+    sbert: bool = field(
+        default=False, metadata={"help": "Use sentence transformers instead of BERT"}
+    )

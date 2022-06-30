@@ -15,7 +15,7 @@ from transformers import (
 from trainer.arguments_class import DataTrainingArguments, ModelArguments, CustomTrainingArguments
 from model.modeling_multi_task import BertLSTMSequenceLabeling
 from model.modeling_speaker_diarization import SpeakerDiarization
-from model.modeling_dialogue_detection import DialogueDetection
+from model.modeling_dialogue_detection import DialogueDetection, DialogueDetectionSBERT
 from dataset.multi_task import SequenceLabelingDataset, SequenceLabelingCollator
 from dataset.speaker_diarization import SpeakerDiarizationDataset, SpeakerDiarizationCollator
 from trainer.bert_trainer import Trainer
@@ -24,7 +24,7 @@ from trainer.dialogue_trainer import DialogueTrainer
 logger = logging.getLogger(__name__)
 
 
-def get_dataset(data_args, dataset):
+def get_dataset(data_args, dataset, word_segment=True):
     train_dataframe = pd.read_csv(data_args.train_data_file, encoding='utf8')[:50]
 
     if data_args.eval_data_file:
@@ -32,8 +32,8 @@ def get_dataset(data_args, dataset):
     else:
         train_dataframe, eval_dataframe = train_test_split(train_dataframe, test_size=0.2, random_state=42)
 
-    train_dataset = dataset(train_dataframe)
-    eval_dataset = dataset(eval_dataframe)
+    train_dataset = dataset(train_dataframe, word_segment=word_segment)
+    eval_dataset = dataset(eval_dataframe, word_segment=word_segment)
 
     return train_dataset, eval_dataset
 
@@ -74,48 +74,63 @@ def main():
     # Set seed
     set_seed(training_args.seed)
 
-    if model_args.tokenizer_name:
-        tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, cache_dir=model_args.cache_dir)
-    elif model_args.model_name_or_path:
-        tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, cache_dir=model_args.cache_dir)
-    else:
-        raise ValueError(
-            "Please provide a pretrained tokenizer name"
-        )
-
     task = training_args.task
+    sbert = training_args.sbert
 
-    if model_args.model_name_or_path:
-        config = AutoConfig.from_pretrained(model_args.model_name_or_path)
-    else:
-        config = AutoConfig.from_pretrained('vinai/phobert-base')
+    if not sbert:
+        if model_args.tokenizer_name:
+            tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, cache_dir=model_args.cache_dir)
+        elif model_args.model_name_or_path:
+            tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, cache_dir=model_args.cache_dir)
+        else:
+            raise ValueError(
+                "Please provide a pretrained tokenizer name"
+            )
 
-    if task == "multitask":
-        model = BertLSTMSequenceLabeling(config,
-                                         fuse_lstm_information=training_args.fuse_lstm_information,
-                                         residual=training_args.residual,
-                                         speaker_class=training_args.speaker_classes,
-                                         iob_class=training_args.iob_classes)
-        collator = SequenceLabelingCollator(tokenizer)
-        dataset = SequenceLabelingDataset
-    elif task == "speaker":
-        model = SpeakerDiarization(config,
-                                   n_class=training_args.speaker_classes)
-        collator = SpeakerDiarizationCollator(tokenizer)
-        dataset = SpeakerDiarizationDataset
+        if model_args.model_name_or_path:
+            config = AutoConfig.from_pretrained(model_args.model_name_or_path)
+        else:
+            config = AutoConfig.from_pretrained('vinai/phobert-base')
+
+        if task == "multitask":
+            model = BertLSTMSequenceLabeling(config,
+                                             fuse_lstm_information=training_args.fuse_lstm_information,
+                                             residual=training_args.residual,
+                                             speaker_class=training_args.speaker_classes,
+                                             iob_class=training_args.iob_classes)
+            collator = SequenceLabelingCollator(tokenizer)
+            dataset = SequenceLabelingDataset
+        elif task == "speaker":
+            model = SpeakerDiarization(config,
+                                       n_class=training_args.speaker_classes)
+            collator = SpeakerDiarizationCollator(tokenizer)
+            dataset = SpeakerDiarizationDataset
+        else:
+            model = DialogueDetection(config,
+                                      n_class=training_args.iob_classes,
+                                      residual=training_args.residual,
+                                      crf=training_args.crf,
+                                      top_k=training_args.top_k)
+            collator = SequenceLabelingCollator(tokenizer)
+            dataset = SequenceLabelingDataset
     else:
-        model = DialogueDetection(config,
-                                  n_class=training_args.iob_classes,
-                                  residual=training_args.residual,
-                                  crf=training_args.crf,
-                                  top_k=training_args.top_k)
-        collator = SequenceLabelingCollator(tokenizer)
+        model = DialogueDetectionSBERT(model_args.model_name_or_path,
+                                       n_class=training_args.iob_classes,
+                                       residual=training_args.residual,
+                                       crf=training_args.crf,
+                                       top_k=training_args.top_k)
+        collator = SequenceLabelingCollator()
         dataset = SequenceLabelingDataset
 
     if not data_args.eval_data_file and not data_args.train_data_file:
         raise ValueError("Please provide train and eval data file")
     else:
-        train_dataset, eval_dataset = get_dataset(data_args, dataset)
+        if sbert:
+            word_segment = False
+        else:
+            word_segment = True
+
+        train_dataset, eval_dataset = get_dataset(data_args, dataset, word_segment)
 
     if task == "dialogue":
         trainer = DialogueTrainer(

@@ -1,6 +1,6 @@
 CUDA_VISIBLE_DEVICES="0" \
 python ./scripts/train.py \
-    --model_name_or_path vinai/phobert-base \
+    --model_name_or_path keepitreal/vietnamese-sbert \
     --train_data_file ./data/films/train_bioes.csv \
     --eval_data_file ./data/films/eval_bioes.csv \
     --do_train \
@@ -10,7 +10,7 @@ python ./scripts/train.py \
     --weight_decay 0.1 \
     --learning_rate 1e-5 \
     --num_train_epochs 50 \
-    --output_dir ./checkpoint/multi_task/v7 \
+    --output_dir ./checkpoint/multi_task/v8 \
     --overwrite_output_dir \
     --adam_beta2 0.98 \
     --warmup_ratio 0.1 \
@@ -22,6 +22,7 @@ python ./scripts/train.py \
     --iob_classes 5 \
     --crf True \
     --top_k 1 \
+    --sbert True \
     --fp16 False \
     --dataloader_pin_memory False \
     --dataloader_num_workers 0 \

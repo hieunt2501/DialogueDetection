@@ -2,6 +2,8 @@ from abc import ABC
 from typing import Optional, List, Tuple, Dict, cast
 
 import torch
+from torch import nn
+from sentence_transformers import SentenceTransformer
 from allennlp.modules.conditional_random_field import ConditionalRandomField
 from allennlp.common.checks import ConfigurationError
 
@@ -249,11 +251,89 @@ class DialogueDetection(BaseModel, ABC):
             predicted_tags = cast(List[List[int]], [x[0][0] for x in best_paths])
             if tags is not None:
                 loss = self.crf(iob_logits, tags, mask)
-                output["loss"] = -loss
+                output["loss"] = -loss / outputs.size()[0]
             output["best_paths"] = best_paths
             output["predicted_tags"] = predicted_tags
 
         return output
-        # return {
-            # "logits": iob_logits,
-        # }
+
+
+class DialogueDetectionSBERT(nn.Module):
+    def __init__(self,
+                 model_name,
+                 out_dim=512,
+                 n_layers=2,
+                 dropout=0.1,
+                 n_class=4,
+                 bidirectional=True,
+                 residual=False,
+                 crf=False,
+                 top_k=1):
+        super().__init__()
+
+        self.model = SentenceTransformer(model_name)
+        self.h_dim = self.model.get_sentence_embedding_dimension()
+
+        # self.window_size = window_size
+        self.residual = residual
+        self.use_crf = crf
+        self.top_k = top_k
+
+
+        self.lstm = nn.LSTM(input_size=self.h_dim,
+                            hidden_size=out_dim,
+                            num_layers=n_layers,
+                            bidirectional=bidirectional,
+                            batch_first=True)
+
+        if bidirectional:
+            out_dim = 2 * out_dim
+
+        if self.use_crf:
+            reverse_label = get_reverse_label(n_class)
+            if n_class == 4:
+                constraints = allowed_transitions("BIOL", reverse_label)
+            else:
+                constraints = allowed_transitions("BIOUL", reverse_label)
+            self.crf = ConditionalRandomField(num_tags=n_class, constraints=constraints)
+
+        if residual:
+            self.transform_linear = torch.nn.Linear(out_dim, self.h_dim)
+            self.clf = ClassificationHead(hidden_size=self.h_dim,
+                                          n_class=n_class,
+                                          dropout=dropout)
+        else:
+            self.clf = ClassificationHead(hidden_size=out_dim,
+                                          n_class=n_class,
+                                          dropout=dropout)
+
+    def forward(self,
+                text,
+                tags: Optional[torch.LongTensor] = None):
+
+        batch_size, num_sentences = text.shape
+        outputs = self.model.encode(text.reshape(-1),
+                                    convert_to_tensor=True,
+                                    show_progress_bar=False).reshape(batch_size, num_sentences, -1)
+        # iob sequence tagging
+        lstm_out, (_, _) = self.lstm(outputs)
+
+        iob_inputs = lstm_out
+        if self.residual:
+            iob_inputs = self.transform_linear(lstm_out)
+            iob_inputs = torch.mean(torch.stack((iob_inputs, outputs)), dim=0)
+
+        iob_logits = self.clf(iob_inputs)
+        output = {"logits": iob_logits}
+
+        if self.use_crf:
+            mask = torch.ones(outputs.size()[:2], dtype=torch.bool).to(outputs.device)
+            best_paths = self.crf.viterbi_tags(iob_logits, mask, top_k=self.top_k)
+            predicted_tags = cast(List[List[int]], [x[0][0] for x in best_paths])
+            if tags is not None:
+                loss = self.crf(iob_logits, tags, mask)
+                output["loss"] = -loss / outputs.size()[0]
+            output["best_paths"] = best_paths
+            output["predicted_tags"] = predicted_tags
+
+        return output
